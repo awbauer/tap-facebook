@@ -12,6 +12,7 @@ import requests
 import backoff
 
 import singer
+import singer.stats
 from singer import utils
 
 from facebookads import FacebookAdsApi
@@ -237,6 +238,7 @@ class AdsInsights(Stream):
                     'Insights job {} did not complete after {} seconds'.format(
                         job_id, INSIGHTS_MAX_WAIT_TO_FINISH_SECONDS))
             time.sleep(5)
+
         return job
 
 
@@ -293,19 +295,16 @@ def do_sync(account, annotated_schemas, state):
         schema = load_schema(stream)
         singer.write_schema(stream.name, schema, stream.key_properties)
 
-        num_records = 0
-        for message in stream:
-            if 'record' in message:
-                num_records += 1
-                record = singer.transform.transform(message['record'], schema)
-                singer.write_record(stream.name, record)
-            elif 'state' in message:
-                singer.write_state(message['state'])
-            else:
-                raise Exception('Unrecognized message {}'.format(message))
-            if num_records % 1000 == 0:
-                LOGGER.info('Got %d %s records so far', num_records, stream.name)
-        LOGGER.info('Got %d %s records total', num_records, stream.name)
+        with singer.stats.FetchStats(source=stream.name) as stats:
+            for message in stream:
+                if 'record' in message:
+                    stats.increment_record_count()
+                    record = singer.transform.transform(message['record'], schema)
+                    singer.write_record(stream.name, record)
+                elif 'state' in message:
+                    singer.write_state(message['state'])
+                else:
+                    raise Exception('Unrecognized message {}'.format(message))
 
 
 def get_abs_path(path):
